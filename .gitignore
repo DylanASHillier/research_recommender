@@ -169,3 +169,48 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+
+
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+research_recommender/node_modules
+research_recommender/.pnp
+research_recommender/.pnp.*
+research_recommender/.yarn/*
+!research_recommender/.yarn/patches
+!research_recommender/.yarn/plugins
+!research_recommender/.yarn/releases
+!research_recommender/.yarn/versions
+
+# testing
+research_recommender/coverage
+
+# next.js
+research_recommender/.next/
+research_recommender/out/
+
+# production
+research_recommender/build
+
+# misc
+*.DS_Store
+*.pem
+
+# debug
+research_recommender/npm-debug.log*
+research_recommender/yarn-debug.log*
+research_recommender/yarn-error.log*
+research_recommender/.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+research_recommender/.env*
+
+# vercel
+research_recommender/.vercel
+
+# typescript
+research_recommender/*.tsbuildinfo
+research_recommender/next-env.d.ts
