@@ -7,7 +7,7 @@ export default function Home() {
   const router = useRouter();
   const [arxivLink, setArxivLink] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: any) => {
     e.preventDefault();
     router.push(`/paper_viewer/${arxivLink}`);
   };

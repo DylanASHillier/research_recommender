@@ -1,10 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 
+interface GameState {
+    reward: number;
+    done: boolean;
+}
+
 const GameClient = () => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
     const dataChannelRef = useRef<RTCDataChannel | null>(null); // For sending game actions
-    const [gameState, setGameState] = useState<any>(null);
+    const [gameState, setGameState] = useState<GameState | null>(null);
     const [isConnected, setIsConnected] = useState(false);
     const [videoStatus, setVideoStatus] = useState<string>("No video");
 
@@ -92,9 +97,14 @@ const GameClient = () => {
                 await pc.setRemoteDescription(answer);
                 setIsConnected(true);
 
-            } catch (err: any) {
-                console.error("WebRTC setup error:", err);
-                setVideoStatus(`Error: ${err.message}`);
+            } catch (err: unknown) {
+                if (err instanceof Error) {
+                    console.error("WebRTC setup error:", err);
+                    setVideoStatus(`Error: ${err.message}`);
+                } else {
+                    console.error("WebRTC setup error:", err);
+                    setVideoStatus("An unknown error occurred");
+                }
             }
         };
 
