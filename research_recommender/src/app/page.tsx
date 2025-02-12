@@ -7,7 +7,7 @@ export default function Home() {
   const router = useRouter();
   const [arxivLink, setArxivLink] = useState('');
 
-  const handleSubmit = (e: any) => {
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     router.push(`/paper_viewer/${arxivLink}`);
   };
