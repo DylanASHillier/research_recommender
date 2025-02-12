@@ -92,7 +92,7 @@ const GameClient = () => {
                 await pc.setRemoteDescription(answer);
                 setIsConnected(true);
 
-            } catch (err) {
+            } catch (err: any) {
                 console.error("WebRTC setup error:", err);
                 setVideoStatus(`Error: ${err.message}`);
             }
