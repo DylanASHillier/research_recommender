@@ -15,25 +15,25 @@ const atariEnvironments = [
 ];
 
 const atariActions = [
-    { key: "0", description: "NOOP" },
-    { key: "1", description: "FIRE" },
-    { key: "2", description: "UP" },
-    { key: "3", description: "RIGHT" },
-    { key: "4", description: "LEFT" },
-    { key: "5", description: "DOWN" },
-    { key: "6", description: "UPRIGHT" },
-    { key: "7", description: "UPLEFT" },
-    { key: "8", description: "DOWNRIGHT" },
-    { key: "9", description: "DOWNLEFT" },
-    { key: "10", description: "UPFIRE" },
-    { key: "11", description: "RIGHTFIRE" },
-    { key: "12", description: "LEFTFIRE" },
-    { key: "13", description: "DOWNFIRE" },
-    { key: "14", description: "UPRIGHTFIRE" },
-    { key: "15", description: "UPLEFTFIRE" },
-    { key: "16", description: "DOWNRIGHTFIRE" },
-    { key: "17", description: "DOWNLEFTFIRE" },
-    { key: "40", description: "RESET1" }
+    { key: "0", description: "NOOP", keyboard: "N" },
+    { key: "1", description: "FIRE", keyboard: "F" },
+    { key: "2", description: "UP", keyboard: "W" },
+    { key: "3", description: "RIGHT", keyboard: "D" },
+    { key: "4", description: "LEFT", keyboard: "A" },
+    { key: "5", description: "DOWN", keyboard: "S" },
+    { key: "6", description: "UPRIGHT", keyboard: "E" },
+    { key: "7", description: "UPLEFT", keyboard: "Q" },
+    { key: "8", description: "DOWNRIGHT", keyboard: "C" },
+    { key: "9", description: "DOWNLEFT", keyboard: "Z" },
+    { key: "10", description: "UPFIRE", keyboard: "R" },
+    { key: "11", description: "RIGHTFIRE", keyboard: "T" },
+    { key: "12", description: "LEFTFIRE", keyboard: "G" },
+    { key: "13", description: "DOWNFIRE", keyboard: "B" },
+    { key: "14", description: "UPRIGHTFIRE", keyboard: "Y" },
+    { key: "15", description: "UPLEFTFIRE", keyboard: "U" },
+    { key: "16", description: "DOWNRIGHTFIRE", keyboard: "I" },
+    { key: "17", description: "DOWNLEFTFIRE", keyboard: "O" },
+    { key: "40", description: "RESET1", keyboard: "P" }
 ];
 
 const GameClient = () => {
@@ -166,33 +166,11 @@ const GameClient = () => {
         const handleKeyPress = (event: KeyboardEvent) => {
             if (!isConnected) return;
 
-            let action = null;
-            switch (event.key) {
-                case 'ArrowLeft':
-                    action = "3";
-                    console.log("Sending action: LEFT");
-                    break;
-                case 'ArrowRight':
-                    action = "2";
-                    console.log("Sending action: RIGHT");
-                    break;
-                case 'ArrowUp':
-                    action = "2";
-                    console.log("Sending action: UP");
-                    break;
-                case 'ArrowDown':
-                    action = "5";
-                    console.log("Sending action: DOWN");
-                    break;
-                case ' ':
-                    action = "1";
-                    console.log("Sending action: FIRE");
-                    break;
-                default:
-                    return;
+            const action = atariActions.find(a => a.keyboard === event.key.toUpperCase());
+            if (action) {
+                console.log(`Sending action: ${action.description}`);
+                sendAction(action.key);
             }
-
-            sendAction(action);
         };
 
         window.addEventListener('keydown', handleKeyPress);
@@ -266,18 +244,16 @@ const GameClient = () => {
                 </select>
             </div>
 
-            {/* Action Selection */}
-            <div className="mt-4">
-                <label htmlFor="action-select" className="block mb-2 font-bold">Select Action:</label>
-                <select
-                    id="action-select"
-                    onChange={(e) => sendAction(e.target.value)}
-                    className="p-2 border rounded-lg"
-                >
+            {/* Action Guide */}
+            <div className="mt-4 p-4 bg-gray-100 rounded-lg">
+                <h3 className="font-bold mb-2">Action Guide</h3>
+                <ul>
                     {atariActions.map((action) => (
-                        <option key={action.key} value={action.key}>{action.description}</option>
+                        <li key={action.key}>
+                            <strong>{action.keyboard}</strong>: {action.description}
+                        </li>
                     ))}
-                </select>
+                </ul>
             </div>
 
             {/* Reset Button */}
