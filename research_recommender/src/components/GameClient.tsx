@@ -80,10 +80,10 @@ const GameClient = () => {
                 });
                 await pc.setLocalDescription(offer);
 
-                if (!process.env.GAME_ENDPOINT) {
+                if (!process.env.NEXT_PUBLIC_GAME_ENDPOINT) {
                     throw new Error("GAME_ENDPOINT is not defined");
                 }
-                const response = await fetch(process.env.GAME_ENDPOINT + "/offer", {
+                const response = await fetch(process.env.NEXT_PUBLIC_GAME_ENDPOINT + "/offer", {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
