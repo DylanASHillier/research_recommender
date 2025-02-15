@@ -3,7 +3,38 @@ import React, { useEffect, useRef, useState } from 'react';
 interface GameState {
     reward: number;
     done: boolean;
+    warning?: string;
 }
+
+const atariEnvironments = [
+    "BreakoutNoFrameskip-v4",
+    "PongNoFrameskip-v4",
+    "SpaceInvadersNoFrameskip-v4",
+    "MsPacmanNoFrameskip-v4",
+    "SeaquestNoFrameskip-v4"
+];
+
+const atariActions = [
+    { key: "0", description: "NOOP" },
+    { key: "1", description: "FIRE" },
+    { key: "2", description: "UP" },
+    { key: "3", description: "RIGHT" },
+    { key: "4", description: "LEFT" },
+    { key: "5", description: "DOWN" },
+    { key: "6", description: "UPRIGHT" },
+    { key: "7", description: "UPLEFT" },
+    { key: "8", description: "DOWNRIGHT" },
+    { key: "9", description: "DOWNLEFT" },
+    { key: "10", description: "UPFIRE" },
+    { key: "11", description: "RIGHTFIRE" },
+    { key: "12", description: "LEFTFIRE" },
+    { key: "13", description: "DOWNFIRE" },
+    { key: "14", description: "UPRIGHTFIRE" },
+    { key: "15", description: "UPLEFTFIRE" },
+    { key: "16", description: "DOWNRIGHTFIRE" },
+    { key: "17", description: "DOWNLEFTFIRE" },
+    { key: "40", description: "RESET1" }
+];
 
 const GameClient = () => {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -12,6 +43,7 @@ const GameClient = () => {
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [isConnected, setIsConnected] = useState(false);
     const [videoStatus, setVideoStatus] = useState<string>("No video");
+    const [selectedEnv, setSelectedEnv] = useState<string>(atariEnvironments[0]);
 
     useEffect(() => {
         const setupWebRTC = async () => {
@@ -88,7 +120,8 @@ const GameClient = () => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         sdp: pc.localDescription?.sdp,
-                        type: pc.localDescription?.type
+                        type: pc.localDescription?.type,
+                        env_name: selectedEnv  // Send the selected environment name
                     })
                 });
 
@@ -116,7 +149,7 @@ const GameClient = () => {
         return () => {
             peerConnectionRef.current?.close();
         };
-    }, []);
+    }, [selectedEnv]);
 
     // Send actions via RTCDataChannel
     const sendAction = (action: string) => {
@@ -143,9 +176,17 @@ const GameClient = () => {
                     action = "2";
                     console.log("Sending action: RIGHT");
                     break;
+                case 'ArrowUp':
+                    action = "2";
+                    console.log("Sending action: UP");
+                    break;
+                case 'ArrowDown':
+                    action = "5";
+                    console.log("Sending action: DOWN");
+                    break;
                 case ' ':
                     action = "1";
-                    console.log("Sending action: START");
+                    console.log("Sending action: FIRE");
                     break;
                 default:
                     return;
@@ -205,9 +246,39 @@ const GameClient = () => {
                     <div>
                         <p>Reward: {gameState.reward}</p>
                         <p>Done: {gameState.done ? 'Yes' : 'No'}</p>
+                        {gameState.warning && <p className="text-red-500">Warning: {gameState.warning}</p>}
                     </div>
                 </div>
             )}
+
+            {/* Environment Selection */}
+            <div className="mt-4">
+                <label htmlFor="env-select" className="block mb-2 font-bold">Select Environment:</label>
+                <select
+                    id="env-select"
+                    value={selectedEnv}
+                    onChange={(e) => setSelectedEnv(e.target.value)}
+                    className="p-2 border rounded-lg"
+                >
+                    {atariEnvironments.map((env) => (
+                        <option key={env} value={env}>{env}</option>
+                    ))}
+                </select>
+            </div>
+
+            {/* Action Selection */}
+            <div className="mt-4">
+                <label htmlFor="action-select" className="block mb-2 font-bold">Select Action:</label>
+                <select
+                    id="action-select"
+                    onChange={(e) => sendAction(e.target.value)}
+                    className="p-2 border rounded-lg"
+                >
+                    {atariActions.map((action) => (
+                        <option key={action.key} value={action.key}>{action.description}</option>
+                    ))}
+                </select>
+            </div>
 
             {/* Reset Button */}
             <button
