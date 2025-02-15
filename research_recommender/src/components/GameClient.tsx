@@ -193,7 +193,7 @@ const GameClient = () => {
     };
 
     return (
-        <div className="max-w-2xl mx-auto p-4">
+        <div className="max-w-2xl mx-auto p-4 text-white">
             <div className="relative bg-black rounded-lg overflow-hidden" style={{ aspectRatio: '16/9' }}>
                 <video
                     ref={videoRef}
@@ -219,7 +219,7 @@ const GameClient = () => {
             </div>
 
             {gameState && (
-                <div className="mt-4 p-4 bg-gray-100 rounded-lg">
+                <div className="mt-4 p-4 bg-gray-800 rounded-lg">
                     <h3 className="font-bold mb-2">Game State</h3>
                     <div>
                         <p>Reward: {gameState.reward}</p>
@@ -236,7 +236,7 @@ const GameClient = () => {
                     id="env-select"
                     value={selectedEnv}
                     onChange={(e) => setSelectedEnv(e.target.value)}
-                    className="p-2 border rounded-lg"
+                    className="p-2 border rounded-lg bg-gray-700 text-white"
                 >
                     {atariEnvironments.map((env) => (
                         <option key={env} value={env}>{env}</option>
@@ -245,7 +245,7 @@ const GameClient = () => {
             </div>
 
             {/* Action Guide */}
-            <div className="mt-4 p-4 bg-gray-100 rounded-lg">
+            <div className="mt-4 p-4 bg-gray-800 rounded-lg">
                 <h3 className="font-bold mb-2">Action Guide</h3>
                 <ul>
                     {atariActions.map((action) => (
