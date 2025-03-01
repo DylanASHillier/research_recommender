@@ -1,3 +1,5 @@
+"""Example demonstrating how to locally run a PettingZoo game with a human player and an LLM player"""
+
 import asyncio
 import torch
 from PIL import Image
@@ -42,10 +44,6 @@ model = AutoModelForVision2Seq.from_pretrained(
 class CustomPettingZooWrapper(PettingZooWrapper):
     """Custom wrapper for PettingZoo environment"""
 
-    def __init__(self, env):
-        """Initialize the wrapper"""
-        super().__init__(env)
-
     def map_action(self, action: int):
         return action
 
@@ -63,7 +61,7 @@ class LLMActionStream(BufferedInputActionStream[LLMAction]):
 
 
 def sub_sample_observations(observations, sample_freq=10, max_samples=2):
-    """Take the last obsservation, and every nth observation
+    """Take the last obsservation, and every sample_freq'th observation
     before that"""
     if len(observations) <= sample_freq:
         return [observations[-1]][-max_samples:]

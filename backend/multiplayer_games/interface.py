@@ -4,16 +4,14 @@ We just use a minimal version of the pettingzoo interface..."""
 
 import abc
 import asyncio
-import dataclasses
 import typing
 
 import pygame
 
 from backend.multiplayer_games import utils
 
-
-ValidActions = typing.TypeVar("ValidActions", bound=typing.Any)
-Observations = typing.TypeVar("Observations", bound=typing.Any)
+ValidActions = typing.TypeVar("ValidActions")
+Observations = typing.TypeVar("Observations")
 PlayerId = int | str
 
 
@@ -64,6 +62,22 @@ class InputActionStream(typing.Generic[ActionEvent], abc.ABC):
     """Stream of input events that can be used to control a game.
     This just needs to output actions asynchronously."""
 
+    def __init__(self, sync: bool = False):
+        self.sync = sync
+        self.sync_event = asyncio.Event() if sync else None
+
+    async def get_sync_state(self):
+        """Wait for the next sync event"""
+        assert self.sync
+        await self.sync_event.wait()
+        self.sync_event.clear()
+        await self.get_state()
+
+    def set_sync_state(self):
+        """Set the sync event"""
+        assert self.sync
+        self.sync_event.set()
+
     @abc.abstractmethod
     async def get_state(self) -> ActionEvent:
         """Returns the current keyboard state asynchronously."""
@@ -73,7 +87,7 @@ class InputActionStream(typing.Generic[ActionEvent], abc.ABC):
 class BufferedInputActionStream(InputActionStream[ActionEvent]):
     """Stream of input events that can be used to control a game."""
 
-    def __init__(self, use_buffer=False, buffer_size=100):
+    def __init__(self, use_buffer=True, buffer_size=100, sync=False):
         """
         :param use_buffer: If True, stream from buffer instead of current state.
         :param buffer_size: Maximum size of the event buffer.
@@ -84,6 +98,7 @@ class BufferedInputActionStream(InputActionStream[ActionEvent]):
         self.buffer = asyncio.Queue(maxsize=buffer_size) if use_buffer else None
         self.current_state = None
         self.lock = asyncio.Lock()
+        super().__init__(sync=sync)
 
     @abc.abstractmethod
     def update_state(self, event: ActionEvent):
@@ -110,7 +125,108 @@ class BufferedInputActionStream(InputActionStream[ActionEvent]):
             return self.current_state  # Return a copy to avoid race conditions.
 
 
-class AsyncAECGameLoop(typing.Generic[ValidActions, Observations, ActionEvent]):
+class AECGameLoop(abc.ABC, typing.Generic[ValidActions, Observations, ActionEvent]):
+    """General Game Loop for AEC Games"""
+
+    def __init__(
+        self, env: MultiPlayerKeyboardMouseGameInterfaceAEC[ValidActions, Observations]
+    ):
+        self.env = env
+        self.num_players = len(env.get_agents())
+        self.channel_actions: dict[PlayerId, InputActionStream[ActionEvent] | None] = {
+            player_id: None for player_id in self.env.get_agents()
+        }
+
+    def setup_player_input(
+        self, player_id: PlayerId, action_stream: InputActionStream[ActionEvent]
+    ):
+        """Setup the input for a player"""
+        self.channel_actions[player_id] = action_stream
+
+    @abc.abstractmethod
+    async def game_loop(self):
+        """Runs the game loop independently and applies the current action."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    async def emit_observations(self, player_id: PlayerId) -> OutputStateStream:
+        """Returns an iterator that yields the observations of the game for a player."""
+        raise NotImplementedError
+
+
+class SynchronousAECGameLoop(AECGameLoop[ValidActions, Observations, ActionEvent]):
+    """A synchronous game loop, designed for turn-based games.
+    Runs the game loop in the background and sends the observations to subscribers, whenever
+    the game state changes. Waits for the action to be applied before continuing the loop.
+    """
+
+    def __init__(
+        self,
+        env: MultiPlayerKeyboardMouseGameInterfaceAEC[ValidActions, Observations],
+    ):
+        self.env = env
+        self.num_players = len(env.get_agents())
+        self.channel_actions: dict[PlayerId, InputActionStream[ActionEvent] | None] = {
+            player_id: None for player_id in self.env.get_agents()
+        }
+        self.state_changed: dict[PlayerId, asyncio.Event] = {
+            player_id: asyncio.Event() for player_id in self.env.get_agents()
+        }
+        self.change_observed: dict[PlayerId, asyncio.Event] = {
+            player_id: asyncio.Event() for player_id in self.env.get_agents()
+        }
+
+    def setup_player_input(
+        self, player_id: PlayerId, action_stream: InputActionStream[ActionEvent]
+    ):
+        """Setup the input for a player"""
+        self.channel_actions[player_id] = action_stream
+
+    async def game_loop(self):
+        """Runs the game loop independently and applies the current action."""
+        self.env.reset()
+        print(
+            "Adding new game loop. Currently running:",
+            len(asyncio.all_tasks()),
+            "tasks",
+            len(self.channel_actions),
+            "actions",
+        )
+        print(self.channel_actions)
+        assert all(
+            action_stream is not None for action_stream in self.channel_actions.values()
+        )
+        assert all(
+            action_stream.sync for action_stream in self.channel_actions.values()
+        )
+        while True:
+            for player_id in self.env.get_agents():
+                action = await self.channel_actions[player_id].get_state()
+                if action is not None:
+                    done = self.env.step(action, player_id)
+                    if done:
+                        self.env.reset()
+                    for player_id in self.env.get_agents():
+                        self.state_changed.set()
+                    await asyncio.gather(
+                        *[
+                            self.change_observed[player_id].wait()
+                            for player_id in self.env.get_agents()
+                        ]
+                    )
+                    for player_id in self.env.get_agents():
+                        self.change_observed[player_id].clear()
+
+    async def emit_observations(self, player_id: PlayerId) -> OutputStateStream:
+        """Returns an iterator that yields the observations of the game for a player."""
+        while True:
+            await self.state_changed[player_id].wait()
+            self.state_changed[player_id].clear()
+            yield self.env.observe(player_id)
+            self.change_observed[player_id].set()
+
+
+class AsyncAECGameLoop(AECGameLoop[ValidActions, Observations, ActionEvent]):
     """An async game loop. Tries to run the game in the background at a fixed simulation rate
     and sends the observations to subscribers.
 
@@ -126,19 +242,11 @@ class AsyncAECGameLoop(typing.Generic[ValidActions, Observations, ActionEvent]):
         simulation_rate: float = 60,
         fps: int = 60,
     ):
-        self.env = env
+        super().__init__(
+            env,
+        )
         self.simulation_rate = simulation_rate
         self.fps = fps
-        self.num_players = len(env.get_agents())
-        self.channel_actions: dict[PlayerId, InputActionStream[ActionEvent] | None] = {
-            player_id: None for player_id in self.env.get_agents()
-        }
-
-    def setup_player_input(
-        self, player_id: PlayerId, action_stream: InputActionStream[ActionEvent]
-    ):
-        """Setup the input for a player"""
-        self.channel_actions[player_id] = action_stream
 
     async def game_loop(self):
         """Runs the game loop independently and applies the current action."""
@@ -181,7 +289,7 @@ class PygameWindow:
 
     def __init__(
         self,
-        game_loop: AsyncAECGameLoop[ValidActions, RGBArray, ActionEvent],
+        game_loop: AECGameLoop[ValidActions, RGBArray, ActionEvent],
         player_id: PlayerId,
         frame_size: tuple[int, int],
     ):
@@ -204,7 +312,7 @@ class PygameWindow:
     async def observe_game_state(self):
         """Observe the game state and display it in a Pygame window"""
         async for observation in self.game_loop.emit_observations(self.player_id):
-            frame = pygame.surfarray.make_surface(observation)
+            frame = pygame.surfarray.make_surface(observation.swapaxes(0, 1))
             self.screen.blit(frame, (0, 0))
             pygame.display.flip()
             self.clock.tick(60)
@@ -292,6 +400,8 @@ class AsyncLLMWrapper(abc.ABC):
     async def emit_actions(self, actions: ValidActions):
         """Emit actions to the game loop"""
         await self.input_stream.handle_event(actions)
+        if self.input_stream.sync:
+            self.input_stream.set_sync_state()
 
     @abc.abstractmethod
     async def compute_actions(self, observation: Observations) -> ValidActions:

@@ -28,7 +28,6 @@ class PettingZooWrapper(interface.MultiPlayerKeyboardMouseGameInterfaceAEC):
     def step(self, actions: interface.ValidActions, player_id: interface.PlayerId):
         actions = self.map_action(actions)
         assert player_id == self.current_player
-        print(actions)
         self.env.step(actions)
 
     def observe(self, player_id: interface.PlayerId) -> interface.Observations:
