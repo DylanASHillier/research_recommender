@@ -1,27 +1,30 @@
 import asyncio
-
-import gymnasium as gym
 import torch
 from PIL import Image
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
-from backend.multiplayer_games.gymnasium_compat import GymnasiumWrapper
+from pettingzoo.atari import surround_v2
+from backend.multiplayer_games.pettingzoo_compat import PettingZooWrapper
 from backend.multiplayer_games.interface import (
     AsyncAECGameLoop,
     AsyncLLMWrapper,
+    InputActionStream,
     BufferedInputActionStream,
     PygameWindow,
+    ObservationAccumulationWrapper,
+    FrameSkipWrapper,
+    OutputStateStream,
 )
-
-# Define the environment name
-ENV_NAME = "LunarLander-v3"
+from backend.multiplayer_games.keyboard import PygameKeyboardWrapper
 
 # Define the key to action mapping
 KEY_TO_ACTION = {
-    "NOOP": 0,
-    "left": 1,
-    "main engine": 2,
+    "space": 1,
+    "up": 2,
+    "left": 4,
     "right": 3,
+    "down": 5,
+    "noop": 0,
 }
 
 # Set device
@@ -36,31 +39,24 @@ model = AutoModelForVision2Seq.from_pretrained(
 ).to(device)
 
 
-class CustomGymnasiumWrapper(GymnasiumWrapper):
-    """Custom wrapper for LunarLander-v3 environment"""
+class CustomPettingZooWrapper(PettingZooWrapper):
+    """Custom wrapper for PettingZoo environment"""
 
     def __init__(self, env):
         """Initialize the wrapper"""
         super().__init__(env)
 
-    def map_action(self, action: set[str]):
-        for key in action:
-            if key in KEY_TO_ACTION:
-                return KEY_TO_ACTION[key]
-        return 0  # Default to NOOP if key not found
-
-    @property
-    def window_size(self):
-        """Need to override for box2d environments"""
-        return 600, 400
+    def map_action(self, action: int):
+        return action
 
 
-LLMAction = str
+LLMAction = int
 
 
 class LLMActionStream(BufferedInputActionStream[LLMAction]):
     def __init__(self, use_buffer=False, buffer_size=100):
         super().__init__(use_buffer=use_buffer, buffer_size=buffer_size)
+        self.current_state = 0  # Default to NOOP
 
     def update_state(self, event: LLMAction):
         self.current_state = event
@@ -77,7 +73,7 @@ def sub_sample_observations(observations, sample_freq=10, max_samples=2):
 
 
 class LLMActionWrapper(AsyncLLMWrapper):
-    """Wrapper for LunarLander-v3 environment using LLM"""
+    """Wrapper for PettingZoo environment using LLM"""
 
     def __init__(self, game_loop, player_id, input_stream):
         super().__init__(game_loop, player_id, input_stream)
@@ -95,7 +91,9 @@ class LLMActionWrapper(AsyncLLMWrapper):
                     *[{"type": "image"} for _ in range(len(images))],
                     {
                         "type": "text",
-                        "text": "What action should the agent take? Reply with 'left', 'right', or 'main engine'.",
+                        "text": "What action should the agent take? Reply with {ACTIONS}.".format(
+                            ACTIONS="fire,left,right,up,down,noop"
+                        ),
                     },
                 ],
             }
@@ -113,33 +111,52 @@ class LLMActionWrapper(AsyncLLMWrapper):
         ].lower()
 
         print(action_text)
-        if "left" in action_text:
-            return "left"
-        elif "right" in action_text:
-            return "right"
-        elif "main" in action_text or "engine" in action_text:
-            return "main engine"
-        else:
-            return "NOOP"
+        for key, action in KEY_TO_ACTION.items():
+            if key in action_text:
+                return action
+        return 0
+
+
+class SingleActionWrapper(InputActionStream[LLMAction]):
+    def __init__(self, input_stream: PygameKeyboardWrapper):
+        self.input_stream = input_stream
+
+    async def get_state(self):
+        action_set: set = await self.input_stream.get_state()
+        for key in action_set:
+            if key in KEY_TO_ACTION:
+                return KEY_TO_ACTION[key]
+        return 0
+
+
+def llm_observation_stream_wrapper(observation_stream: OutputStateStream):
+    return ObservationAccumulationWrapper(FrameSkipWrapper(observation_stream, 10))
 
 
 async def main():
-    env = gym.make(ENV_NAME, render_mode="rgb_array")
+    env = surround_v2.env(full_action_space=True)
     env.reset()
-    wrapped_env = CustomGymnasiumWrapper(env)
+    wrapped_env = CustomPettingZooWrapper(env)
     frame_size = wrapped_env.window_size
 
-    game_loop = AsyncAECGameLoop(wrapped_env)
-    pygame_window = PygameWindow(game_loop, player_id=0, frame_size=frame_size)
-    input_stream = LLMActionStream(use_buffer=True)
-    llm_wrapper = LLMActionWrapper(game_loop, player_id=0, input_stream=input_stream)
+    game_loop = AsyncAECGameLoop(wrapped_env, simulation_rate=15, fps=30)
+    pygame_window = PygameWindow(game_loop, player_id="first_0", frame_size=frame_size)
+    input_stream = PygameKeyboardWrapper()
+    input_stream = SingleActionWrapper(input_stream)
+    llm_input_stream = LLMActionStream(use_buffer=True)
+    llm_wrapper = LLMActionWrapper(
+        game_loop, player_id="second_0", input_stream=llm_input_stream
+    )
 
     pygame_window.init_pygame()
-    game_loop.setup_player_input(0, input_stream)
+    game_loop.setup_player_input("first_0", input_stream)
+    game_loop.setup_player_input("second_0", llm_input_stream)
     await asyncio.gather(
         game_loop.game_loop(),
         pygame_window.observe_game_state(),
-        llm_wrapper.consume_observations(),
+        llm_wrapper.consume_observations(
+            llm_observation_stream_wrapper(game_loop.emit_observations("second_0"))
+        ),
     )
 
 

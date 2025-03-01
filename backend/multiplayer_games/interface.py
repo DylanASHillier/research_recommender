@@ -14,7 +14,7 @@ from backend.multiplayer_games import utils
 
 ValidActions = typing.TypeVar("ValidActions", bound=typing.Any)
 Observations = typing.TypeVar("Observations", bound=typing.Any)
-PlayerId = int
+PlayerId = int | str
 
 
 class MultiPlayerKeyboardMouseGameInterfaceAEC(
@@ -40,8 +40,9 @@ class MultiPlayerKeyboardMouseGameInterfaceAEC(
         """Reset Game State"""
 
     @abc.abstractmethod
-    def step(self, actions: ValidActions, player_id: PlayerId):
-        """Take a step in the game"""
+    def step(self, actions: ValidActions, player_id: PlayerId) -> bool:
+        """Take a step in the game
+        Returns True if the game is over"""
 
     def observe(self, player_id: PlayerId) -> Observations:
         """Observe the game state"""
@@ -60,6 +61,16 @@ ActionEvent = typing.TypeVar("ActionEvent")
 
 
 class InputActionStream(typing.Generic[ActionEvent], abc.ABC):
+    """Stream of input events that can be used to control a game.
+    This just needs to output actions asynchronously."""
+
+    @abc.abstractmethod
+    async def get_state(self) -> ActionEvent:
+        """Returns the current keyboard state asynchronously."""
+        raise NotImplementedError
+
+
+class BufferedInputActionStream(InputActionStream[ActionEvent]):
     """Stream of input events that can be used to control a game."""
 
     def __init__(self, use_buffer=False, buffer_size=100):
@@ -71,7 +82,7 @@ class InputActionStream(typing.Generic[ActionEvent], abc.ABC):
         """
         self.use_buffer = use_buffer
         self.buffer = asyncio.Queue(maxsize=buffer_size) if use_buffer else None
-        self.current_state = set()
+        self.current_state = None
         self.lock = asyncio.Lock()
 
     @abc.abstractmethod
@@ -88,7 +99,7 @@ class InputActionStream(typing.Generic[ActionEvent], abc.ABC):
                 if self.buffer.full():
                     await self.buffer.get()  # Prevent blocking by discarding oldest event
                 await self.buffer.put(
-                    set(self.current_state)
+                    self.current_state
                 )  # Store a snapshot of the state
 
     async def get_state(self):
@@ -96,7 +107,7 @@ class InputActionStream(typing.Generic[ActionEvent], abc.ABC):
         async with self.lock:
             if self.use_buffer and not self.buffer.empty():
                 return await self.buffer.get()
-            return set(self.current_state)  # Return a copy to avoid race conditions.
+            return self.current_state  # Return a copy to avoid race conditions.
 
 
 class AsyncAECGameLoop(typing.Generic[ValidActions, Observations, ActionEvent]):
@@ -119,8 +130,8 @@ class AsyncAECGameLoop(typing.Generic[ValidActions, Observations, ActionEvent]):
         self.simulation_rate = simulation_rate
         self.fps = fps
         self.num_players = len(env.get_agents())
-        self.channel_actions: dict[int, InputActionStream[ActionEvent] | None] = {
-            i: None for i in range(self.num_players)
+        self.channel_actions: dict[PlayerId, InputActionStream[ActionEvent] | None] = {
+            player_id: None for player_id in self.env.get_agents()
         }
 
     def setup_player_input(
@@ -139,16 +150,17 @@ class AsyncAECGameLoop(typing.Generic[ValidActions, Observations, ActionEvent]):
             len(self.channel_actions),
             "actions",
         )
+        print(self.channel_actions)
         assert all(
             action_stream is not None for action_stream in self.channel_actions.values()
         )
         rate_limiter = utils.AsyncRateLimiter(self.simulation_rate)
         while True:
             async with rate_limiter:
-                for player_id in range(self.num_players):
+                for player_id in self.env.get_agents():
                     action = await self.channel_actions[player_id].get_state()
                     if action is not None:
-                        _, _, done, _, _ = self.env.step(action, player_id)
+                        done = self.env.step(action, player_id)
                         if done:
                             self.env.reset()
 
@@ -196,6 +208,29 @@ class PygameWindow:
             self.screen.blit(frame, (0, 0))
             pygame.display.flip()
             self.clock.tick(60)
+
+
+class FrameSkipWrapper(OutputStateStream):
+    """Wrapper for AEC Game Loop OutputStateStream. Skips frames from the game loop
+    When the game is run, it outputs observations continuously. For slow subscribers,
+    this wrapper can be used to skip frames and only return every nth frame.
+    """
+
+    def __init__(self, original_output_stream: OutputStateStream, skip_frames: int = 1):
+        self.output_stream = original_output_stream
+        self.skip_frames = skip_frames
+        self.frame_count = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        observations = await self.output_stream.__anext__()
+        self.frame_count += 1
+        if self.frame_count % self.skip_frames == 0:
+            return observations
+        else:
+            return await self.__anext__()
 
 
 class ObservationAccumulationWrapper(OutputStateStream):
@@ -248,7 +283,7 @@ class AsyncLLMWrapper(abc.ABC):
         self,
         game_loop: AsyncAECGameLoop[ValidActions, Observations, ActionEvent],
         player_id: PlayerId,
-        input_stream: InputActionStream,
+        input_stream: BufferedInputActionStream,
     ):
         self.game_loop = game_loop
         self.player_id = player_id
@@ -262,11 +297,8 @@ class AsyncLLMWrapper(abc.ABC):
     async def compute_actions(self, observation: Observations) -> ValidActions:
         """Compute the actions for a player"""
 
-    async def consume_observations(self):
+    async def consume_observations(self, observation_stream: OutputStateStream):
         """Consume observations from the game loop"""
-        observation_stream = ObservationAccumulationWrapper(
-            self.game_loop.emit_observations(self.player_id)
-        )
         async for observations in observation_stream:
             actions = await self.compute_actions(observations)
             await self.emit_actions(actions)

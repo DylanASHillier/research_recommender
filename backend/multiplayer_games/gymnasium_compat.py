@@ -28,14 +28,14 @@ class GymnasiumWrapper(interface.MultiPlayerKeyboardMouseGameInterfaceAEC):
         raise NotImplementedError("Need to implement action mapping")
 
     def valid_actions(self):
-        return self.env.action_space, False
+        return self.env.action_space
 
     def reset(self, seed: int = 42):
         return self.env.reset(seed=seed)
 
     def step(self, actions, player_id):
         actions = self.map_action(actions)
-        return self.env.step(actions)
+        return self.env.step(actions)[2] | self.env.step(actions)[3]
 
     def observe(self, player_id):
         return self.env.render()

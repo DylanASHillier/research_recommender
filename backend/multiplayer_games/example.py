@@ -49,6 +49,7 @@ class CustomGymnasiumWrapper(GymnasiumWrapper):
                 return KEY_TO_ACTION[key]
         return 0  # Default to NOOP if key not found
 
+    @property
     def window_size(self):
         """Need to override for box2d environments"""
         return 600, 400
@@ -61,7 +62,7 @@ async def main():
     # env = Monitor(env, "./video", force=True, video_callable=lambda episode_id: True)
     wrapped_env = CustomGymnasiumWrapper(env)
 
-    frame_size = wrapped_env.window_size()
+    frame_size = wrapped_env.window_size
 
     # Create the game loop
     game_loop = AsyncAECGameLoop(wrapped_env)

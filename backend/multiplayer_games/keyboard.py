@@ -148,8 +148,12 @@ class AllInputs:
 HasMousePos = bool
 
 
-class KeyboardActionStream(interface.InputActionStream[KeyboardActionEvent]):
+class KeyboardActionStream(interface.BufferedInputActionStream[KeyboardActionEvent]):
     """Stream of keyboard input events."""
+
+    def __init__(self, use_buffer=False, buffer_size=100):
+        super().__init__(use_buffer=use_buffer, buffer_size=buffer_size)
+        self.current_state = set()
 
     def update_state(self, event: KeyboardActionEvent):
         if event["type"] == "keydown":
