@@ -1,0 +1,272 @@
+"""Interface for multiplayer games
+
+We just use a minimal version of the pettingzoo interface..."""
+
+import abc
+import asyncio
+import dataclasses
+import typing
+
+import pygame
+
+from backend.multiplayer_games import utils
+
+
+ValidActions = typing.TypeVar("ValidActions", bound=typing.Any)
+Observations = typing.TypeVar("Observations", bound=typing.Any)
+PlayerId = int
+
+
+class MultiPlayerKeyboardMouseGameInterfaceAEC(
+    abc.ABC, typing.Generic[ValidActions, Observations]
+):
+    """Interface for multiplayer games that use keyboard and mouse input
+    Uses AEC Agent Environment Cycling"""
+
+    @property
+    def current_player(self) -> PlayerId:
+        """Return the current player"""
+
+    @property
+    def window_size(self) -> tuple[int, int]:
+        """Return the window size"""
+
+    @abc.abstractmethod
+    def valid_actions(self) -> ValidActions:
+        """Return the valid actions for the game"""
+
+    @abc.abstractmethod
+    def reset(self, seed: int) -> None:
+        """Reset Game State"""
+
+    @abc.abstractmethod
+    def step(self, actions: ValidActions, player_id: PlayerId):
+        """Take a step in the game"""
+
+    def observe(self, player_id: PlayerId) -> Observations:
+        """Observe the game state"""
+
+    def close(self) -> None:
+        """Close the game"""
+
+    def get_agents(self) -> list[PlayerId]:
+        """Return the agents in the game"""
+
+
+OutputStateStream = typing.AsyncIterator[Observations]
+
+
+ActionEvent = typing.TypeVar("ActionEvent")
+
+
+class InputActionStream(typing.Generic[ActionEvent], abc.ABC):
+    """Stream of input events that can be used to control a game."""
+
+    def __init__(self, use_buffer=False, buffer_size=100):
+        """
+        :param use_buffer: If True, stream from buffer instead of current state.
+        :param buffer_size: Maximum size of the event buffer.
+
+        Generally this needs to be subscribed to a keyboard event source
+        """
+        self.use_buffer = use_buffer
+        self.buffer = asyncio.Queue(maxsize=buffer_size) if use_buffer else None
+        self.current_state = set()
+        self.lock = asyncio.Lock()
+
+    @abc.abstractmethod
+    def update_state(self, event: ActionEvent):
+        """Handles an input event and updates state or buffer."""
+        raise NotImplementedError
+
+    async def handle_event(self, event: ActionEvent):
+        """Handles an input event and updates state or buffer asynchronously."""
+        async with self.lock:
+            self.update_state(event)
+
+            if self.use_buffer:
+                if self.buffer.full():
+                    await self.buffer.get()  # Prevent blocking by discarding oldest event
+                await self.buffer.put(
+                    set(self.current_state)
+                )  # Store a snapshot of the state
+
+    async def get_state(self):
+        """Returns the current keyboard state or an event from the buffer asynchronously."""
+        async with self.lock:
+            if self.use_buffer and not self.buffer.empty():
+                return await self.buffer.get()
+            return set(self.current_state)  # Return a copy to avoid race conditions.
+
+
+class AsyncAECGameLoop(typing.Generic[ValidActions, Observations, ActionEvent]):
+    """An async game loop. Tries to run the game in the background at a fixed simulation rate
+    and sends the observations to subscribers.
+
+    Keeps seperate input states for each player that can be updated by the server.
+    Methods:
+    - game_loop: Runs the game loop independently and applies the current action.
+    - get_observations: Returns an iterator that yields the observations of the game for a player.
+    """
+
+    def __init__(
+        self,
+        env: MultiPlayerKeyboardMouseGameInterfaceAEC[ValidActions, Observations],
+        simulation_rate: float = 60,
+        fps: int = 60,
+    ):
+        self.env = env
+        self.simulation_rate = simulation_rate
+        self.fps = fps
+        self.num_players = len(env.get_agents())
+        self.channel_actions: dict[int, InputActionStream[ActionEvent] | None] = {
+            i: None for i in range(self.num_players)
+        }
+
+    def setup_player_input(
+        self, player_id: PlayerId, action_stream: InputActionStream[ActionEvent]
+    ):
+        """Setup the input for a player"""
+        self.channel_actions[player_id] = action_stream
+
+    async def game_loop(self):
+        """Runs the game loop independently and applies the current action."""
+        self.env.reset()
+        print(
+            "Adding new game loop. Currently running:",
+            len(asyncio.all_tasks()),
+            "tasks",
+            len(self.channel_actions),
+            "actions",
+        )
+        assert all(
+            action_stream is not None for action_stream in self.channel_actions.values()
+        )
+        rate_limiter = utils.AsyncRateLimiter(self.simulation_rate)
+        while True:
+            async with rate_limiter:
+                for player_id in range(self.num_players):
+                    action = await self.channel_actions[player_id].get_state()
+                    if action is not None:
+                        _, _, done, _, _ = self.env.step(action, player_id)
+                        if done:
+                            self.env.reset()
+
+    async def emit_observations(self, player_id: PlayerId) -> OutputStateStream:
+        """Returns an iterator that yields the observations of the game for a player."""
+        rate_limiter = utils.AsyncRateLimiter(self.fps)
+        while True:
+            async with rate_limiter:
+                yield self.env.observe(player_id)
+
+
+RGBArray = typing.Any
+
+
+class PygameWindow:
+    """A subscriber that displays the game state in a Pygame window.
+    Also allows the player to interact with the game using keyboard and mouse input."""
+
+    def __init__(
+        self,
+        game_loop: AsyncAECGameLoop[ValidActions, RGBArray, ActionEvent],
+        player_id: PlayerId,
+        frame_size: tuple[int, int],
+    ):
+        self.game_loop = game_loop
+        self.player_id = player_id
+        self.frame_size = frame_size
+        self.screen = ...
+        self.clock = ...
+
+    # pylint: disable=no-member
+    def init_pygame(self):
+        """Initialize Pygame"""
+        pygame.init()
+        self.screen = pygame.display.set_mode(self.frame_size)
+        pygame.display.set_caption("TextArena Game")
+        self.clock = pygame.time.Clock()
+
+    # pylint: enable=no-member
+
+    async def observe_game_state(self):
+        """Observe the game state and display it in a Pygame window"""
+        async for observation in self.game_loop.emit_observations(self.player_id):
+            frame = pygame.surfarray.make_surface(observation)
+            self.screen.blit(frame, (0, 0))
+            pygame.display.flip()
+            self.clock.tick(60)
+
+
+class ObservationAccumulationWrapper(OutputStateStream):
+    """Wrapper for AEC Game Loop OutputStateStream. Accumulates observations from the game loop
+    When the game is run, it outputs observations continuously, which may be too
+    fast for the subscriber to consume. This wrapper accumulates the observations
+    accumulated since the last call to get_observations and returns them all at once.
+
+    In essence this uses one loop to accumulate observations and another loop to consume them
+    instantenously whenever the subscriber is ready to consume them.
+    """
+
+    def __init__(self, original_output_stream: OutputStateStream):
+        self.output_stream = original_output_stream
+        self.accumulated_observations = []
+        self.lock = asyncio.Lock()
+        asyncio.create_task(self.accumulate_observations())
+
+    async def accumulate_observations(self):
+        """Accumulate observations from the original output stream."""
+        async for observation in self.output_stream:
+            async with self.lock:
+                self.accumulated_observations.append(observation)
+
+    async def get_observations(self) -> typing.List[Observations]:
+        """Return the accumulated observations and clear the buffer."""
+        async with self.lock:
+            observations = self.accumulated_observations.copy()
+            self.accumulated_observations.clear()
+            return observations
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        observations = await self.get_observations()
+        if observations:
+            return observations
+        else:
+            await asyncio.sleep(0.15)  # Prevent busy waiting
+            return await self.__anext__()
+
+
+class AsyncLLMWrapper(abc.ABC):
+    """Wrapper for LLM Subscriber to AsyncAECGameLoop
+
+    The wrapper should emit an InputActionStream and consume an OutputStateStream"""
+
+    def __init__(
+        self,
+        game_loop: AsyncAECGameLoop[ValidActions, Observations, ActionEvent],
+        player_id: PlayerId,
+        input_stream: InputActionStream,
+    ):
+        self.game_loop = game_loop
+        self.player_id = player_id
+        self.input_stream = input_stream
+
+    async def emit_actions(self, actions: ValidActions):
+        """Emit actions to the game loop"""
+        await self.input_stream.handle_event(actions)
+
+    @abc.abstractmethod
+    async def compute_actions(self, observation: Observations) -> ValidActions:
+        """Compute the actions for a player"""
+
+    async def consume_observations(self):
+        """Consume observations from the game loop"""
+        observation_stream = ObservationAccumulationWrapper(
+            self.game_loop.emit_observations(self.player_id)
+        )
+        async for observations in observation_stream:
+            actions = await self.compute_actions(observations)
+            await self.emit_actions(actions)

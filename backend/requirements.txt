@@ -1,0 +1,6 @@
+colorlog
+supabase
+fastapi
+uvicorn
+python-dotenv
+numpy
